@@ -1,0 +1,55 @@
+scalar Date
+scalar AnyObject
+
+type Avatar {
+    id: ID!
+    url: String!
+}
+
+input AvatarInput {
+    url: String!
+}
+
+type User {
+    id: ID!
+    creationDate: Date!
+    login: String!
+    avatar: Avatar
+    status: Status!
+    customStatus: ABCStatus
+    scalarValue: AnyObject!
+}
+
+type Query {
+    user: User!
+}
+
+union Friend = Avatar | User
+
+type FriendsLink {
+    id: ID!
+    friends: [Friend!]
+}
+
+type ABCType {
+    abc: String!
+}
+
+input UpdateUserInput {
+    id: ID!
+    login: String
+    avatar: AvatarInput
+}
+
+enum Status {
+    ONLINE
+    OFFLINE
+}
+
+enum ABCStatus {
+    hasXYZStatus
+}
+
+type Mutation {
+    updateUser(user: UpdateUserInput): User
+}

@@ -24,6 +24,7 @@
     "dependencies": {
         "@graphql-codegen/plugin-helpers": "^1.17.9",
         "casual": "^1.6.2",
+        "fast-check": "^2.13.0",
         "indefinite": "^2.4.1",
         "pascal-case": "^3.1.1",
         "sentence-case": "^3.0.3",
@@ -34,7 +35,10 @@
     },
     "devDependencies": {
         "@auto-it/conventional-commits": "^9.57.0",
+        "@graphql-codegen/cli": "^1.21.3",
         "@graphql-codegen/testing": "^1.17.7",
+        "@graphql-codegen/typescript": "^1.21.1",
+        "@graphql-codegen/typescript-resolvers": "^1.19.0",
         "@types/faker": "^4.1.11",
         "@types/jest": "^25.1.5",
         "@typescript-eslint/eslint-plugin": "^2.26.0",
@@ -63,7 +67,8 @@
         "prettify": "prettier --config ./.prettierrc.js --write",
         "auto:version": "yarn version --`auto version` --message 'Bump version to: %s [skip ci]'",
         "auto:publish": "yarn publish && git push --follow-tags --set-upstream origin $CIRCLE_BRANCH",
-        "release": "auto changelog && yarn auto:version && yarn auto:publish && auto release"
+        "release": "auto changelog && yarn auto:version && yarn auto:publish && auto release",
+        "generate": "graphql-codegen"
     },
     "lint-staged": {
         "*.{js,ts,tsx}": [

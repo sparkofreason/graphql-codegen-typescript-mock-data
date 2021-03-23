@@ -87,15 +87,15 @@ const getNamedType = (
     const name = namedType.name.value;
     switch (name) {
         case 'String':
-            return `'${casual.word}'`;
+            return 'fc.string()';
         case 'Float':
-            return Math.round(casual.double(0, 10) * 100) / 100;
+            return 'fc.float()';
         case 'ID':
-            return `'${casual.uuid}'`;
+            return 'fc.uuid()';
         case 'Boolean':
-            return casual.boolean;
+            return 'fc.boolean()';
         case 'Int':
-            return casual.integer(0, 9999);
+            return 'fc.integer()';
         default: {
             const foundType = types.find((enumType: TypeItem) => enumType.name === name);
             if (foundType) {
@@ -103,30 +103,38 @@ const getNamedType = (
                     case 'enum': {
                         // It's an enum
                         const typenameConverter = createNameConverter(typenamesConvention);
-                        const value = foundType.values ? foundType.values[0] : '';
-                        return `${typenameConverter(foundType.name)}.${updateTextCase(value, enumValuesConvention)}`;
-                    }
-                    case 'union':
-                        // Return the first union type node.
-                        return getNamedType(
-                            typeName,
-                            fieldName,
-                            types,
-                            typenamesConvention,
-                            enumValuesConvention,
-                            terminateCircularRelationships,
-                            prefix,
-                            foundType.types && foundType.types[0],
+                        const choices = foundType.values.map(
+                            (v) => `${typenameConverter(foundType.name)}.${updateTextCase(v, enumValuesConvention)}`,
                         );
+                        return `fc.constantFrom(${choices.join(',')})`;
+                        // return `${typenameConverter(foundType.name)}.${updateTextCase(value, enumValuesConvention)}`;
+                    }
+                    case 'union': {
+                        // fc.oneof over foundType.types.map(getNamedType)
+                        const unionArbitraries = foundType.types.map((t) =>
+                            getNamedType(
+                                typeName,
+                                fieldName,
+                                types,
+                                typenamesConvention,
+                                enumValuesConvention,
+                                terminateCircularRelationships,
+                                prefix,
+                                t,
+                            ),
+                        );
+                        return `fc.oneof(${unionArbitraries.join(',')})`;
+                    }
+
                     case 'scalar': {
                         const customScalar = customScalars ? getScalarDefinition(customScalars[foundType.name]) : null;
                         // it's a scalar, let's use a string as a value if there is no custom
                         // mapping for this particular scalar
                         if (!customScalar || !customScalar.generator) {
                             if (foundType.name === 'Date') {
-                                return `'${new Date(casual.unix_time).toISOString()}'`;
+                                return 'fc.date().map(d => d.toISOString())';
                             }
-                            return `'${casual.word}'`;
+                            return 'fc.asciiString()';
                         }
 
                         // If there is a mapping to a `casual` type, then use it and make sure
@@ -218,7 +226,7 @@ const generateMockValue = (
                 currentType.type,
                 customScalars,
             );
-            return `[${value}]`;
+            return `fc.array(${value})`;
         }
     }
 };
@@ -226,6 +234,7 @@ const generateMockValue = (
 const getMockString = (
     typeName: string,
     fields: string,
+    overrideFields: string,
     typenamesConvention: NamingConvention,
     terminateCircularRelationships: boolean,
     addTypename = false,
@@ -235,29 +244,28 @@ const getMockString = (
     const casedName = createNameConverter(typenamesConvention)(typeName);
     const typename = addTypename ? `\n        __typename: '${casedName}',` : '';
     const typenameReturnType = addTypename ? `{ __typename: '${casedName}' } & ` : '';
-
+    const mockName = toMockName(typeName, casedName, prefix);
+    const modelName = `${mockName}Model`;
     if (terminateCircularRelationships) {
         return `
-export const ${toMockName(
-            typeName,
-            casedName,
-            prefix,
-        )} = (overrides?: Partial<${typesPrefix}${casedName}>, relationshipsToOmit: Set<string> = new Set()): ${typenameReturnType}${typesPrefix}${casedName} => {
-    relationshipsToOmit.add('${casedName}');
-    return {${typename}
+type ${modelName} = {${typename}
 ${fields}
-    };
+};
+export const ${mockName} = (overrides?: Partial<${modelName}>, relationshipsToOmit: Set<string> = new Set()): fc.Arbitrary<${typenameReturnType}${typesPrefix}${casedName}> => {
+    relationshipsToOmit.add('${casedName}');
+    return fc.record({${typename}
+${overrideFields}
+    });
 };`;
     } else {
         return `
-export const ${toMockName(
-            typeName,
-            casedName,
-            prefix,
-        )} = (overrides?: Partial<${typesPrefix}${casedName}>): ${typenameReturnType}${typesPrefix}${casedName} => {
-    return {${typename}
+type ${modelName} = {${typename}
 ${fields}
-    };
+};
+export const ${mockName} = (overrides?: Partial<${modelName}>): fc.Arbitrary<${typenameReturnType}${typesPrefix}${casedName}> => {
+    return fc.record({${typename}
+${overrideFields}
+    });
 };`;
     }
 };
@@ -330,7 +338,7 @@ export const plugin: PluginFunction<TypescriptMocksPluginConfig> = (schema, docu
             return {
                 name: fieldName,
                 mockFn: (typeName: string) => {
-                    const value = generateMockValue(
+                    let value = generateMockValue(
                         typeName,
                         fieldName,
                         types,
@@ -341,7 +349,14 @@ export const plugin: PluginFunction<TypescriptMocksPluginConfig> = (schema, docu
                         node.type,
                         config.scalars,
                     );
-
+                    const nullable = node.type.kind !== 'NonNullType';
+                    if (nullable) {
+                        value = `fc.option(${value})`;
+                    }
+                    return {
+                        field: `        ${fieldName}:  fc.Arbitrary<${typeName}['${fieldName}']>;`,
+                        overrideField: `        ${fieldName}: overrides && overrides.hasOwnProperty('${fieldName}') ? overrides.${fieldName}! : ${value},`,
+                    };
                     return `        ${fieldName}: overrides && overrides.hasOwnProperty('${fieldName}') ? overrides.${fieldName}! : ${value},`;
                 },
             };
@@ -353,28 +368,33 @@ export const plugin: PluginFunction<TypescriptMocksPluginConfig> = (schema, docu
                 typeName: fieldName,
                 mockFn: () => {
                     const mockFields = node.fields
-                        ? node.fields
-                              .map((field) => {
-                                  const value = generateMockValue(
-                                      fieldName,
-                                      field.name.value,
-                                      types,
-                                      typenamesConvention,
-                                      enumValuesConvention,
-                                      !!config.terminateCircularRelationships,
-                                      config.prefix,
-                                      field.type,
-                                      config.scalars,
-                                  );
-
-                                  return `        ${field.name.value}: overrides && overrides.hasOwnProperty('${field.name.value}') ? overrides.${field.name.value}! : ${value},`;
-                              })
-                              .join('\n')
-                        : '';
+                        ? node.fields.map((field) => {
+                              let value = generateMockValue(
+                                  fieldName,
+                                  field.name.value,
+                                  types,
+                                  typenamesConvention,
+                                  enumValuesConvention,
+                                  !!config.terminateCircularRelationships,
+                                  config.prefix,
+                                  field.type,
+                                  config.scalars,
+                              );
+                              const nullable = field.type.kind !== 'NonNullType';
+                              if (nullable) {
+                                  value = `fc.option(${value})`;
+                              }
+                              return {
+                                  field: `        ${field.name.value}: fc.Arbitrary<${fieldName}['${field.name.value}']>;`,
+                                  overrideField: `        ${field.name.value}: overrides && overrides.hasOwnProperty('${field.name.value}') ? overrides.${field.name.value}! : ${value},`,
+                              };
+                          })
+                        : [];
 
                     return getMockString(
                         fieldName,
-                        mockFields,
+                        mockFields.map((f) => f.field).join('\n'),
+                        mockFields.map((f) => f.overrideField).join('\n'),
                         typenamesConvention,
                         !!config.terminateCircularRelationships,
                         false,
@@ -396,11 +416,12 @@ export const plugin: PluginFunction<TypescriptMocksPluginConfig> = (schema, docu
             return {
                 typeName,
                 mockFn: () => {
-                    const mockFields = fields ? fields.map(({ mockFn }: any) => mockFn(typeName)).join('\n') : '';
+                    const mockFields = fields ? fields.map(({ mockFn }: any) => mockFn(typeName)) : [];
 
                     return getMockString(
                         typeName,
-                        mockFields,
+                        mockFields.map((f) => f.field).join('\n'),
+                        mockFields.map((f) => f.overrideField).join('\n'),
                         typenamesConvention,
                         !!config.terminateCircularRelationships,
                         !!config.addTypename,
@@ -431,11 +452,12 @@ export const plugin: PluginFunction<TypescriptMocksPluginConfig> = (schema, docu
     // List of function that will generate the mock.
     // We generate it after having visited because we need to distinct types from enums
     const mockFns = definitions.map(({ mockFn }: any) => mockFn).filter((mockFn: Function) => !!mockFn);
+    const fastCheckImport = `import * as fc from 'fast-check'\n`;
     const typesFileImport = typesFile
         ? `/* eslint-disable @typescript-eslint/no-use-before-define,@typescript-eslint/no-unused-vars,no-prototype-builtins */
 import { ${typeImports.join(', ')} } from '${typesFile}';\n`
         : '';
 
-    return `${typesFileImport}${mockFns.map((mockFn: Function) => mockFn()).join('\n')}
+    return `${fastCheckImport}${typesFileImport}${mockFns.map((mockFn: Function) => mockFn()).join('\n')}
 `;
 };
